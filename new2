@@ -1,0 +1,148 @@
+import io
+import pandas as pd
+import plotly.express as px
+import ipywidgets as widgets
+from IPython.display import display, clear_output
+import plotly.io as pio
+pio.renderers.default = "colab"
+
+# Step 1: Upload widget
+uploader = widgets.FileUpload(
+    accept='.xlsx',
+    multiple=False
+)
+
+# Step 2: Sheet selector (disabled initially)
+sheet_dropdown = widgets.Dropdown(
+    options=[],
+    description='Sheet:',
+    disabled=True
+)
+
+# Step 3: Project selector (disabled initially)
+project_dropdown = widgets.Dropdown(
+    options=[],
+    description='Project:',
+    style={'description_width': 'initial'},
+    layout=widgets.Layout(width='50%'),
+    disabled=True
+)
+
+# Create separate output areas for different purposes
+upload_info_output = widgets.Output()
+graph_output = widgets.Output()
+
+# Global variable to hold loaded ExcelFile and DataFrame for selected sheet
+xls = None
+df_current = None
+
+# Layout the widgets vertically
+ui = widgets.VBox([
+    uploader,
+    sheet_dropdown,
+    project_dropdown,
+    upload_info_output,
+    graph_output
+])
+
+# When file uploaded: load sheet names
+def on_upload_change(change):
+    global xls, df_current
+    if uploader.value:
+        # Get first uploaded file data correctly
+        uploaded_file = list(uploader.value.values())[0]
+        content = uploaded_file['content']
+        bytes_io = io.BytesIO(content)
+        
+        xls = pd.ExcelFile(bytes_io)
+        sheet_dropdown.options = xls.sheet_names
+        sheet_dropdown.disabled = False
+        
+        # Reset project dropdown and output
+        project_dropdown.options = []
+        project_dropdown.disabled = True
+        
+        with upload_info_output:
+            clear_output()
+            print(f"Uploaded file: {uploaded_file['metadata']['name']}")
+            print("Select a sheet to load data.")
+        
+        with graph_output:
+            clear_output()
+
+# When sheet selected: load that sheet into df_current, populate projects dropdown
+def on_sheet_change(change):
+    global df_current
+    if change['new']:
+        sheet_name = change['new']
+        df_current = pd.read_excel(xls, sheet_name=sheet_name)
+        
+        # Check 'Project' column exists
+        if 'Material type' in df_current.columns:
+            projects = df_current['Material type'].dropna().unique().tolist()
+            project_dropdown.options = sorted(projects)
+            project_dropdown.disabled = False
+            project_dropdown.value = None  # reset selection
+            
+            with upload_info_output:
+                clear_output()
+                print(f"Loaded sheet: {sheet_name}")
+                print("Select a project to display the fluctuation graph.")
+            
+            with graph_output:
+                clear_output()
+        else:
+            project_dropdown.options = []
+            project_dropdown.disabled = True
+            with upload_info_output:
+                clear_output()
+                print(f"Sheet '{sheet_name}' does not contain a 'Material type' column.")
+
+# When project selected: generate and display the plot
+def on_project_change(change):
+    if change['new'] and df_current is not None:
+        selected_project = change['new']
+        
+        with graph_output:
+            clear_output(wait=True)  # only clear the graph output area
+            df_selected = df_current[df_current['Material type'] == selected_project].copy()
+            
+            if df_selected.empty:
+                print(f"No data available for project: {selected_project}")
+                return
+            
+            # Identify week columns starting with 'wk' (case insensitive)
+            wk_cols = [col for col in df_selected.columns if col.lower().startswith('wk')]
+            if not wk_cols:
+                print("No columns starting with 'wk' found in data.")
+                return
+            
+            # Melt dataframe for plotting
+            df_long = df_selected.melt(
+                id_vars=['Material', 'Material type', 'Delviered (08.07-16.07)', 'Deficit quantity'],
+                value_vars=wk_cols,
+                var_name='Week',
+                value_name='Fluctuation'
+            )
+            
+            fig = px.line(
+                df_long,
+                x='Week',
+                y='Fluctuation',
+                color='Material',
+                markers=True,
+                title=f'Fluctuation over Weeks for Project: {selected_project}',
+                hover_data=['Delviered (08.07-16.07)', 'Deficit quantity'],
+                height=600,
+                width=1100
+            )
+            fig.update_layout(xaxis_tickangle=45)
+            fig.show(renderer='colab')
+
+# Connect the widget events
+uploader.observe(on_upload_change, names='value')
+sheet_dropdown.observe(on_sheet_change, names='value')
+project_dropdown.observe(on_project_change, names='value')
+
+# Display the UI
+display(ui)
